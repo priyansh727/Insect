@@ -21,6 +21,7 @@ public class ClientViewer extends JPanel {
     private final Runnable onClosed;
 
     private volatile BufferedImage frame;
+    private final Timer spinner = new Timer(30, e -> repaint()); // animates the loading ring
     private JFrame window;
     private int framesThisSecond;
     private long secondStart = System.currentTimeMillis();
@@ -55,11 +56,12 @@ public class ClientViewer extends JPanel {
         this.remoteWidth = remoteWidth;
         this.remoteHeight = remoteHeight;
         this.onClosed = onClosed;
-        setBackground(Color.BLACK);
+        setBackground(Theme.BG);
         setPreferredSize(new Dimension(1280, 1280 * remoteHeight / remoteWidth));
         setFocusable(true);
         setFocusTraversalKeysEnabled(false); // let Tab go to the remote machine
         installInputListeners();
+        spinner.start();
     }
 
     private void showWindow() {
@@ -72,6 +74,7 @@ public class ClientViewer extends JPanel {
         window.addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosed(WindowEvent e) {
+                spinner.stop();
                 closeQuietly();
                 onClosed.run();
             }
@@ -132,14 +135,34 @@ public class ClientViewer extends JPanel {
         super.paintComponent(g);
         BufferedImage current = frame;
         if (current == null) {
-            g.setColor(Color.WHITE);
-            g.drawString("Waiting for first frame...", 20, 30);
+            paintLoading((Graphics2D) g);
             return;
         }
+        spinner.stop();
         Rectangle r = viewRect();
         Graphics2D g2 = (Graphics2D) g;
         g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
         g2.drawImage(current, r.x, r.y, r.width, r.height, null);
+    }
+
+    /** Spinning gradient ring shown until the first frame arrives. */
+    private void paintLoading(Graphics2D g0) {
+        Graphics2D g = (Graphics2D) g0.create();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        int cx = getWidth() / 2;
+        int cy = getHeight() / 2 - 16;
+        int angle = (int) (Theme.seconds() * 360) % 360;
+        g.setStroke(new BasicStroke(4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.setColor(new Color(255, 255, 255, 25));
+        g.drawOval(cx - 22, cy - 22, 44, 44);
+        g.setPaint(new GradientPaint(cx - 22, cy - 22, Theme.ACCENT, cx + 22, cy + 22, Theme.TEAL));
+        g.drawArc(cx - 22, cy - 22, 44, 44, -angle, 100);
+        g.setFont(Theme.font(Font.PLAIN, 14f));
+        g.setColor(Theme.MUTED);
+        String text = "Connecting to the screen...";
+        g.drawString(text, cx - g.getFontMetrics().stringWidth(text) / 2, cy + 52);
+        g.dispose();
     }
 
     private void installInputListeners() {

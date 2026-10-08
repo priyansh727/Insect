@@ -30,7 +30,7 @@ java -cp out Main
 | Networking | `ServerSocket` / `Socket` over TCP, `DataInput/OutputStream` |
 | Concurrency | separate threads for sending frames and receiving input; `SwingWorker` for connecting |
 | Remote control | `Robot.mouseMove / mousePress / keyPress` |
-| Front end | Swing with custom-painted dark theme (rounded cards, buttons, status dots, logo) |
+| Front end | Swing with a custom-painted animated theme: drifting gradient backdrop, glass cards that slide in, shimmering gradient buttons, pulsing status dots, floating logo, slot-machine password reveal |
 | Security | random 6-digit password checked before streaming starts |
 
 ## Files

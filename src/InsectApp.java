@@ -2,6 +2,8 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.datatransfer.StringSelection;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
@@ -20,32 +22,33 @@ public class InsectApp extends JFrame {
     // Share side
     private HostServer host;
     private String password = newPassword();
-    private final JLabel passwordLabel = Theme.label(formatPassword(password), Theme.mono(34f), Theme.ACCENT);
-    private final Theme.Button shareButton = new Theme.Button("Start sharing", Theme.ACCENT, Theme.BG);
-    private final Theme.Button copyButton = new Theme.Button("Copy details", Theme.BORDER, Theme.TEXT);
-    private final Theme.Button newPasswordButton = new Theme.Button("New password", Theme.BORDER, Theme.TEXT);
+    private final Theme.GradientText passwordLabel = new Theme.GradientText(formatPassword(password), Theme.mono(34f));
+    private final Theme.Button shareButton = new Theme.Button("Start sharing", Theme.Button.Kind.PRIMARY);
+    private final Theme.Button copyButton = new Theme.Button("Copy details", Theme.Button.Kind.SECONDARY);
+    private final Theme.Button newPasswordButton = new Theme.Button("New password", Theme.Button.Kind.SECONDARY);
     private final Theme.StatusLine hostStatus = new Theme.StatusLine("Not sharing");
 
     // Connect side
     private final JTextField ipField = Theme.field(prefs.get("lastIp", "127.0.0.1"));
     private final JTextField portField = Theme.field(String.valueOf(Protocol.DEFAULT_PORT));
     private final JPasswordField passwordField = Theme.passwordField();
-    private final Theme.Button connectButton = new Theme.Button("Connect", Theme.ACCENT, Theme.BG);
+    private final Theme.Button connectButton = new Theme.Button("Connect", Theme.Button.Kind.PRIMARY);
     private final Theme.StatusLine clientStatus = new Theme.StatusLine("Not connected");
 
     public InsectApp() {
         super("Insect");
         setIconImages(Theme.appIcons());
 
-        JPanel root = new JPanel(new BorderLayout(0, 20));
-        root.setBackground(Theme.BG);
+        Theme.Backdrop root = new Theme.Backdrop(new BorderLayout(0, 20));
         root.setBorder(new EmptyBorder(24, 28, 18, 28));
         root.add(header(), BorderLayout.NORTH);
 
         JPanel cards = new JPanel(new GridLayout(1, 2, 20, 0));
         cards.setOpaque(false);
-        cards.add(shareCard());
-        cards.add(connectCard());
+        Theme.Card share = shareCard();
+        Theme.Card connect = connectCard();
+        cards.add(share);
+        cards.add(connect);
         root.add(cards, BorderLayout.CENTER);
 
         root.add(Theme.label("Insect v1.0   ·   Both computers must be on the same network",
@@ -57,6 +60,19 @@ public class InsectApp extends JFrame {
         setMinimumSize(getSize());
         setLocationRelativeTo(null);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
+
+        // Intro: cards slide in one after the other, then the password "rolls" into place
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowOpened(WindowEvent e) {
+                share.reveal();
+                connect.reveal();
+                Theme.startAnimating(root);
+                Timer intro = new Timer(500, ev -> rollPassword());
+                intro.setRepeats(false);
+                intro.start();
+            }
+        });
     }
 
     private JComponent header() {
@@ -66,15 +82,15 @@ public class InsectApp extends JFrame {
 
         JPanel text = new JPanel(new GridLayout(2, 1));
         text.setOpaque(false);
-        text.add(Theme.label("Insect", Theme.font(Font.BOLD, 26f), Theme.TEXT));
+        text.add(new Theme.GradientText("Insect", Theme.font(Font.BOLD, 28f)));
         text.add(Theme.label("Share your screen. Control any PC. Built in Java.",
                 Theme.font(Font.PLAIN, 14f), Theme.MUTED));
         header.add(text, BorderLayout.CENTER);
         return header;
     }
 
-    private JComponent shareCard() {
-        Theme.Card card = new Theme.Card();
+    private Theme.Card shareCard() {
+        Theme.Card card = new Theme.Card(0);
         card.item(Theme.label("Share this PC", Theme.font(Font.BOLD, 18f), Theme.TEXT));
         card.item(Theme.label("Let someone see and control this computer.", Theme.font(Font.PLAIN, 13f), Theme.MUTED));
         card.gap(22);
@@ -94,14 +110,14 @@ public class InsectApp extends JFrame {
         shareButton.addActionListener(e -> toggleSharing());
         newPasswordButton.addActionListener(e -> {
             password = newPassword();
-            passwordLabel.setText(formatPassword(password));
+            rollPassword();
         });
         copyButton.addActionListener(e -> copyDetails());
         return card;
     }
 
-    private JComponent connectCard() {
-        Theme.Card card = new Theme.Card();
+    private Theme.Card connectCard() {
+        Theme.Card card = new Theme.Card(150);
         card.item(Theme.label("Connect to a PC", Theme.font(Font.BOLD, 18f), Theme.TEXT));
         card.item(Theme.label("View and control another computer.", Theme.font(Font.PLAIN, 13f), Theme.MUTED));
         card.gap(22);
@@ -130,7 +146,7 @@ public class InsectApp extends JFrame {
             host.stop();
             host = null;
             shareButton.setText("Start sharing");
-            shareButton.setStyle(Theme.ACCENT, Theme.BG);
+            shareButton.setKind(Theme.Button.Kind.PRIMARY);
             newPasswordButton.setEnabled(true);
             hostStatus.set(Theme.MUTED, "Not sharing");
             return;
@@ -145,7 +161,7 @@ public class InsectApp extends JFrame {
             return;
         }
         shareButton.setText("Stop sharing");
-        shareButton.setStyle(Theme.DANGER, Color.WHITE);
+        shareButton.setKind(Theme.Button.Kind.DANGER);
         newPasswordButton.setEnabled(false);
     }
 
@@ -187,6 +203,7 @@ public class InsectApp extends JFrame {
         }
 
         connectButton.setEnabled(false);
+        connectButton.setText("Connecting...");
         clientStatus.set(Theme.WARN, "Connecting to " + ip + "...");
         new SwingWorker<Void, Void>() {
             @Override
@@ -199,6 +216,7 @@ public class InsectApp extends JFrame {
             @Override
             protected void done() {
                 connectButton.setEnabled(true);
+                connectButton.setText("Connect");
                 try {
                     get();
                     clientStatus.set(Theme.ACCENT, "Connected to " + ip);
@@ -210,6 +228,25 @@ public class InsectApp extends JFrame {
                 }
             }
         }.execute();
+    }
+
+    /** Slot-machine effect: digits spin, then lock in one by one from the left. */
+    private void rollPassword() {
+        String target = password;
+        long start = System.currentTimeMillis();
+        Timer roll = new Timer(40, null);
+        roll.addActionListener(e -> {
+            int locked = (int) ((System.currentTimeMillis() - start) / 110);
+            StringBuilder shown = new StringBuilder();
+            for (int i = 0; i < target.length(); i++) {
+                shown.append(i < locked ? target.charAt(i) : (char) ('0' + RANDOM.nextInt(10)));
+            }
+            passwordLabel.setText(formatPassword(shown.toString()));
+            if (locked >= target.length() || !target.equals(password)) {
+                roll.stop();
+            }
+        });
+        roll.start();
     }
 
     private static String friendlyError(Throwable error, String ip) {
