@@ -18,13 +18,18 @@ public class ClientViewer extends JPanel {
     private final int remoteWidth;
     private final int remoteHeight;
 
+    private final Runnable onClosed;
+
     private volatile BufferedImage frame;
     private JFrame window;
     private int framesThisSecond;
     private long secondStart = System.currentTimeMillis();
 
-    /** Connects and logs in; throws if the host is unreachable or the password is wrong. */
-    public static void connect(String host, int port, String password) throws IOException {
+    /**
+     * Connects and logs in; throws if the host is unreachable or the password is wrong.
+     * {@code onClosed} runs once the viewer window closes or the connection drops.
+     */
+    public static void connect(String host, int port, String password, Runnable onClosed) throws IOException {
         Socket socket = new Socket();
         socket.connect(new InetSocketAddress(host, port), 5000);
         socket.setTcpNoDelay(true);
@@ -37,17 +42,19 @@ public class ClientViewer extends JPanel {
             socket.close();
             throw new IOException("Wrong password");
         }
-        ClientViewer viewer = new ClientViewer(socket, in, out, in.readInt(), in.readInt());
+        ClientViewer viewer = new ClientViewer(socket, in, out, in.readInt(), in.readInt(), onClosed);
         SwingUtilities.invokeLater(viewer::showWindow);
         new Thread(viewer::receiveFrames, "frames").start();
     }
 
-    private ClientViewer(Socket socket, DataInputStream in, DataOutputStream out, int remoteWidth, int remoteHeight) {
+    private ClientViewer(Socket socket, DataInputStream in, DataOutputStream out,
+                         int remoteWidth, int remoteHeight, Runnable onClosed) {
         this.socket = socket;
         this.in = in;
         this.out = out;
         this.remoteWidth = remoteWidth;
         this.remoteHeight = remoteHeight;
+        this.onClosed = onClosed;
         setBackground(Color.BLACK);
         setPreferredSize(new Dimension(1280, 1280 * remoteHeight / remoteWidth));
         setFocusable(true);
@@ -56,7 +63,8 @@ public class ClientViewer extends JPanel {
     }
 
     private void showWindow() {
-        window = new JFrame("ScreenBridge - " + socket.getInetAddress().getHostAddress());
+        window = new JFrame(title(-1));
+        window.setIconImages(Theme.appIcons());
         window.add(this);
         window.pack();
         window.setLocationRelativeTo(null);
@@ -65,6 +73,7 @@ public class ClientViewer extends JPanel {
             @Override
             public void windowClosed(WindowEvent e) {
                 closeQuietly();
+                onClosed.run();
             }
         });
         window.setVisible(true);
@@ -99,10 +108,15 @@ public class ClientViewer extends JPanel {
             secondStart = now;
             SwingUtilities.invokeLater(() -> {
                 if (window != null) {
-                    window.setTitle("ScreenBridge - " + socket.getInetAddress().getHostAddress() + " - " + fps + " FPS");
+                    window.setTitle(title(fps));
                 }
             });
         }
+    }
+
+    private String title(int fps) {
+        String title = "Insect - " + socket.getInetAddress().getHostAddress();
+        return fps < 0 ? title : title + " - " + fps + " FPS";
     }
 
     /** Where the remote screen is drawn inside this panel (scaled to fit, aspect ratio kept). */

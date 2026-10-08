@@ -3,7 +3,6 @@ import javax.imageio.ImageIO;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
 import javax.imageio.stream.ImageOutputStream;
-import javax.swing.*;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.*;
@@ -16,68 +15,75 @@ import java.util.Collections;
  * frames, and replays mouse/keyboard events received from the client.
  */
 public class HostServer {
+    public enum State { WAITING, CONNECTED, REJECTED, ERROR }
+
+    /** Receives status updates; called from background threads. */
+    public interface Listener {
+        void onStatus(State state, String detail);
+    }
+
     private static final int FPS = 15;
     private static final float JPEG_QUALITY = 0.6f;
     private static final int MAX_WIDTH = 1280; // frames are downscaled to save bandwidth
 
-    private final int port;
     private final String password;
+    private final Listener listener;
     private final Robot robot;
     private final Rectangle screen;
-    private final JLabel status = new JLabel("Waiting for a client...");
 
-    public HostServer(int port, String password) throws AWTException {
-        this.port = port;
+    private volatile boolean running;
+    private ServerSocket server;
+    private volatile Socket client;
+
+    public HostServer(String password, Listener listener) throws AWTException {
         this.password = password;
+        this.listener = listener;
         this.robot = new Robot();
         this.screen = new Rectangle(Toolkit.getDefaultToolkit().getScreenSize());
     }
 
-    public void start() {
-        showWindow();
+    public void start(int port) throws IOException {
+        server = new ServerSocket(port);
+        running = true;
         new Thread(this::acceptLoop, "accept").start();
     }
 
-    private void showWindow() {
-        JFrame frame = new JFrame("ScreenBridge - Host");
-        JPanel panel = new JPanel(new GridLayout(0, 1, 4, 4));
-        panel.setBorder(BorderFactory.createEmptyBorder(12, 16, 12, 16));
-        panel.add(new JLabel("Share these details with the person connecting:"));
-        panel.add(new JLabel("IP address: " + String.join(", ", localAddresses())));
-        panel.add(new JLabel("Port: " + port));
-        JLabel pw = new JLabel("Password: " + password);
-        pw.setFont(pw.getFont().deriveFont(Font.BOLD, 18f));
-        panel.add(pw);
-        panel.add(status);
-        frame.add(panel);
-        frame.pack();
-        frame.setLocationRelativeTo(null);
-        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setVisible(true);
+    /** Stops sharing and disconnects anyone currently connected. */
+    public void stop() {
+        running = false;
+        closeQuietly(server);
+        closeQuietly(client);
     }
 
-    private void setStatus(String text) {
-        SwingUtilities.invokeLater(() -> status.setText(text));
+    private void report(State state, String detail) {
+        if (running) {
+            listener.onStatus(state, detail);
+        }
     }
 
     /** Accepts one client at a time; when it leaves, waits for the next one. */
     private void acceptLoop() {
-        try (ServerSocket server = new ServerSocket(port)) {
-            while (true) {
-                try (Socket socket = server.accept()) {
-                    socket.setTcpNoDelay(true);
-                    handleClient(socket);
-                } catch (IOException e) {
-                    // client dropped; fall through and wait for the next one
+        report(State.WAITING, null);
+        while (running) {
+            boolean wasConnected = false;
+            try (Socket socket = server.accept()) {
+                client = socket;
+                socket.setTcpNoDelay(true);
+                wasConnected = handleClient(socket);
+            } catch (IOException e) {
+                if (server.isClosed()) {
+                    return;
                 }
-                setStatus("Client disconnected. Waiting for a client...");
             }
-        } catch (IOException e) {
-            setStatus("Error: " + e.getMessage());
+            client = null;
+            if (wasConnected) {
+                report(State.WAITING, "Client disconnected");
+            }
         }
     }
 
-    private void handleClient(Socket socket) throws IOException {
+    /** Returns true if the client logged in (as opposed to giving a wrong password). */
+    private boolean handleClient(Socket socket) throws IOException {
         String who = socket.getInetAddress().getHostAddress();
         DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
         DataOutputStream out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
@@ -85,17 +91,22 @@ public class HostServer {
         if (!password.equals(in.readUTF())) {
             out.writeBoolean(false);
             out.flush();
-            setStatus("Rejected wrong password from " + who);
-            return;
+            report(State.REJECTED, who);
+            return false;
         }
         out.writeBoolean(true);
         out.writeInt(screen.width);
         out.writeInt(screen.height);
         out.flush();
-        setStatus("Connected: " + who);
+        report(State.CONNECTED, who);
 
         new Thread(() -> sendFrames(socket, out), "frames").start();
-        receiveInput(in); // blocks until the client disconnects
+        try {
+            receiveInput(in); // blocks until the client disconnects
+        } catch (IOException e) {
+            // normal end of a session
+        }
+        return true;
     }
 
     private void sendFrames(Socket socket, DataOutputStream out) {
@@ -124,10 +135,7 @@ public class HostServer {
                 }
             }
         } catch (IOException | InterruptedException e) {
-            try {
-                socket.close(); // unblocks receiveInput so the host can accept again
-            } catch (IOException ignored) {
-            }
+            closeQuietly(socket); // unblocks receiveInput so the host can accept again
         }
     }
 
@@ -193,7 +201,16 @@ public class HostServer {
         }
     }
 
-    private static java.util.List<String> localAddresses() {
+    private static void closeQuietly(Closeable c) {
+        if (c != null) {
+            try {
+                c.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    public static java.util.List<String> localAddresses() {
         java.util.List<String> list = new ArrayList<>();
         try {
             for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
